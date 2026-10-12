@@ -1,0 +1,96 @@
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  azureServiceConnection: 'AzureVoting-Azure'
+  acrServiceConnection: 'AzureVoting-ACR'
+  resourceGroup: 'azure-voting-rg'
+  aksCluster: 'voting-aks'
+  acrName: 'azurevoting'
+  acrLoginServer: 'azurevoting.azurecr.io'
+  imageRepository: 'voting'
+  namespace: 'default'
+  dockerfilePath: 'azure-vote/Dockerfile'
+  imageTag: '$(Build.BuildId)'
+
+stages:
+  # Stage 1: Build and push the Docker image
+  - stage: Build
+    displayName: 'Build and Push Image'
+    jobs:
+      - job: BuildImage
+        displayName: 'Build Flask Application'
+        steps:
+          - checkout: self
+
+          - task: Docker@2
+            displayName: 'Build and Push to ACR'
+            inputs:
+              command: buildAndPush
+              containerRegistry: '$(acrServiceConnection)'
+              repository: '$(imageRepository)'
+              Dockerfile: '$(dockerfilePath)'
+              buildContext: '.'
+              tags: |
+                $(imageTag)
+                latest
+
+  # Stage 2: Deploy the image to AKS
+  - stage: Deploy
+    displayName: 'Deploy to AKS'
+    dependsOn: Build
+    condition: succeeded()
+
+    jobs:
+      - job: DeployApplication
+        displayName: 'Update Kubernetes Deployment'
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: 'Connect to AKS and Deploy'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+
+                echo "Getting AKS credentials..."
+                az aks get-credentials \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(aksCluster)" \
+                  --overwrite-existing
+
+                echo "Checking Kubernetes access..."
+                kubectl get deployment azure-vote-front \
+                  -n "$(namespace)"
+
+                echo "Deploying image..."
+                kubectl set image \
+                  deployment/azure-vote-front \
+                  azure-vote-front="$(acrLoginServer)/$(imageRepository):$(imageTag)" \
+                  -n "$(namespace)"
+
+                echo "Waiting for rollout..."
+                kubectl rollout status \
+                  deployment/azure-vote-front \
+                  -n "$(namespace)" \
+                  --timeout=180s
+
+                echo "Checking application resources..."
+                kubectl get pods -n "$(namespace)"
+                kubectl get service azure-vote-front \
+                  -n "$(namespace)"
+

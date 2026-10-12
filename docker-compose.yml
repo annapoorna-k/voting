@@ -1,0 +1,24 @@
+services:
+  azure-vote-back:
+    image: redis:7-alpine
+    container_name: azure-vote-back
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  azure-vote-front:
+    build:
+      context: .
+      dockerfile: azure-vote/Dockerfile
+    image: azure-vote-front:latest
+    container_name: azure-vote-front
+    environment:
+      REDIS: azure-vote-back
+    ports:
+      - "8080:80"
+    depends_on:
+      - azure-vote-back
+    restart: unless-stopped
+
+volumes:
+  redis-data:
